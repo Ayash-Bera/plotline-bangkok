@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Plotline local browser checks</title>
+<style>
+*{box-sizing:border-box}body{font:14px/1.5 system-ui,sans-serif;margin:0;padding:12px;background:#f4f6f2;color:#1c3328}h1{font-size:19px;margin:0 0 4px}p{margin:0 0 8px}.controls{display:flex;flex-wrap:wrap;gap:7px;align-items:center;margin-bottom:7px}button,select{font:inherit;padding:5px 8px;border:1px solid #a7b6a5;border-radius:5px;background:white;color:inherit}button{cursor:pointer}button:disabled{opacity:.6;cursor:wait}label{display:flex;gap:5px;align-items:center}.viewport{overflow:auto;max-width:100%;border:1px solid #a7b6a5;background:white}iframe{display:block;border:0;width:390px;height:480px}#status{font-weight:600;height:3em;overflow:auto}details{margin-top:10px}textarea{display:block;width:100%;height:220px;margin-top:8px;font:11px/1.4 monospace}
+</style>
+<h1>Local browser acceptance</h1>
+<p>The frame loads the actual production app. Narrow widths check this host's layout. Timing records semantic readiness and frame opportunities, not completed display presentation.</p>
+<div class="controls">
+<label>App width <select id="width"><option>360</option><option selected>390</option><option>768</option><option>1280</option></select> px</label>
+<label>Height <select id="height"><option value="fit" selected>Fit visible area</option><option>480</option><option>640</option><option>844</option><option>900</option></select></label>
+<label>Response phase <select id="phase"><option value="warmup">Warmup</option><option value="measured">Measured</option></select></label>
+<label><input id="auto" type="checkbox">Auto-rearm responses</label>
+<label>Cadence label <select id="cadence-label"><option value="idle">Idle</option><option value="motion">Motion</option></select></label>
+</div>
+<div class="controls">
+<button id="audit" disabled>Audit current layout</button>
+<button id="arm-scenario" disabled>Arm scenario response</button>
+<button id="arm-state" disabled>Arm next UI response</button>
+<button id="sample" disabled>Sample cadence for 12 seconds</button>
+<button id="cancel" disabled>Cancel active checks</button>
+<button id="clear" disabled>Clear timing records</button>
+<button id="refresh" disabled>Refresh report</button>
+</div>
+<p id="status" role="status">Loading production app</p>
+<div class="viewport"><iframe id="app" title="Production Plotline app"></iframe></div>
+<details><summary>Raw check report</summary><textarea id="report" aria-label="Browser check report" readonly></textarea></details>
+<script type="module" src="./browser.js"></script>
+</html>
