@@ -4,7 +4,7 @@ const frame = document.getElementById("app"), status = document.getElementById("
 const control = id => document.getElementById(id);
 const target = new URL(new URLSearchParams(location.search).get("app") || "../index.html", location.href);
 if (target.origin !== location.origin || target.href === location.href) throw new Error("Choose a different app page on the harness origin.");
-const records = { version: 3, createdAt: new Date().toISOString(), app: target.href, loads: [], layout: [], interactions: [], cadence: [], events: [], longFrames: [], exports: [], context: [], errors: [], invalidSetups: [], resets: [], dropped: {} };
+const records = { version: 4, createdAt: new Date().toISOString(), app: target.href, loads: [], layout: [], editing: [], recovery: [], interactions: [], cadence: [], events: [], longFrames: [], exports: [], context: [], errors: [], invalidSetups: [], resets: [], dropped: {} };
 let context = null, armed = null, pending = null, cadence = null, loadSequence = 0, runSequence = 0;
 let autoTimer = null, autoGeneration = 0;
 const clean = value => String(value || "").trim().replace(/\s+/g, " ").slice(0, 160);
@@ -17,7 +17,7 @@ const append = (name, value) => {
 function update() { if (!pending && !cadence) report.value = JSON.stringify(records, null, 2); }
 function say(text) { status.textContent = text; update(); }
 function enabled(ready) {
-  for (const id of ["audit", "arm-scenario", "arm-state", "sample", "cancel", "clear", "refresh"]) control(id).disabled = !ready;
+  for (const id of ["audit", "arm-scenario", "arm-state", "sample", "cancel", "clear", "refresh", "inspect-editing", "map-recovery"]) control(id).disabled = !ready;
   if (ready) control("sample").disabled = !!cadence;
 }
 function environment(ctx) {
@@ -286,6 +286,58 @@ function audit() {
   const value = { valid: true, environment: environment(context), pageScrollWidth: doc.documentElement.scrollWidth, bodyScrollWidth: doc.body.scrollWidth, horizontalOverflow: doc.documentElement.scrollWidth > width + 1, outside, overlaps, rectangles, limits: "Diagnostics skip intentional clipped/scrolling descendants; native workflows and screenshots remain required." };
   append("layout", value); say(`Layout audit: ${value.horizontalOverflow || outside.length || overlaps.length ? "review findings" : "no detected overflow or overlap"} at ${width} client px.`);
 }
+function editingSnapshot(ctx) {
+  const rect = selector => {
+    const r = ctx.doc.querySelector(selector)?.getBoundingClientRect();
+    return r ? { left: r.left, top: r.top, width: r.width, height: r.height, bottom: r.bottom } : null;
+  };
+  return { loadId: ctx.id, at: new Date().toISOString(), viewport: { width: ctx.win.innerWidth, height: ctx.win.innerHeight }, scrollY: ctx.win.scrollY, focusedElement: label(ctx.doc.activeElement), focusedClass: ctx.doc.activeElement?.className, canvas: rect(".maplibregl-canvas"), cancel: rect(".map-draw-cancel"), drawing: !!ctx.doc.querySelector(".drawing-hint"), plot: clean(ctx.doc.querySelector(".plot-area")?.textContent), sliders: [...ctx.doc.querySelectorAll('input[type="range"]')].map(input => ({ id: input.id, height: input.getBoundingClientRect().height })) };
+}
+function inspectEditing() {
+  if (!context || !currentDocument(context)) { say("The app document is unavailable."); return; }
+  append("editing", editingSnapshot(context)); say("Editing position and focus recorded. This does not complete a pointer drawing test.");
+}
+async function testGraphicsRecovery() {
+  cancelActive("Graphics recovery replaced an active timing check");
+  if (!guard("test graphics recovery")) return;
+  const ctx = context, canvas = ctx.doc.querySelector(".maplibregl-canvas");
+  const data = { loadId: ctx.id, start: new Date().toISOString(), valid: false, lostEvent: false, restoredEvent: false, suspendedControls: false, errorsBefore: records.errors.length };
+  const lost = () => { data.lostEvent = true; };
+  const restored = () => { data.restoredEvent = true; };
+  let extension;
+  const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
+  const drawingReady = () => [...ctx.doc.querySelectorAll(".draw-actions button")].some(button => clean(button.textContent) === "Draw plot" && !button.disabled);
+  control("map-recovery").disabled = true;
+  try {
+    const gl = canvas?.getContext("webgl2");
+    extension = gl?.getExtension("WEBGL_lose_context");
+    if (!extension) throw new Error("The current renderer does not expose WEBGL_lose_context.");
+    canvas.addEventListener("webglcontextlost", lost);
+    canvas.addEventListener("webglcontextrestored", restored);
+    say("Testing real graphics context loss, then restoration. Timing samples are cancelled.");
+    extension.loseContext();
+    await delay(1000);
+    if (!currentDocument(ctx)) throw new Error("The app document changed during context loss.");
+    data.suspendedControls = !drawingReady();
+    extension.restoreContext();
+    const deadline = performance.now() + 20000;
+    while (currentDocument(ctx) && performance.now() < deadline && (!data.restoredEvent || !drawingReady())) await delay(200);
+    if (!currentDocument(ctx)) throw new Error("The app document changed during recovery.");
+    data.after = editingSnapshot(ctx);
+    data.ready = drawingReady();
+    data.newErrors = records.errors.slice(data.errorsBefore);
+    data.valid = data.lostEvent && data.restoredEvent && data.suspendedControls && data.ready && data.newErrors.length === 0;
+    if (!data.valid) data.reason = "Loss, control suspension, recovery, or error-free restoration was not observed.";
+  } catch (error) { data.reason = error.message; }
+  finally {
+    if (extension && !data.restoredEvent) extension.restoreContext();
+    canvas?.removeEventListener("webglcontextlost", lost);
+    canvas?.removeEventListener("webglcontextrestored", restored);
+    data.end = new Date().toISOString(); append("recovery", data);
+    control("map-recovery").disabled = false;
+    say(`Graphics recovery recorded: valid=${data.valid}${data.reason ? `; ${data.reason}` : ""}.`);
+  }
+}
 function observeExports(ctx, listen) {
   const urls = new Map(), { win, doc } = ctx;
   let exportSequence = 0, lastActivation = null;
@@ -360,6 +412,8 @@ window.addEventListener("scroll", () => { refreshVisibility("parent scroll"); up
 window.addEventListener("resize", () => { cancelActive("Host viewport changed during a check"); setHeight(); refreshVisibility("host resize"); say("Host viewport changed. Rearm after it settles."); });
 const intersection = new IntersectionObserver(() => refreshVisibility("frame intersection"), { threshold: [0, 0.98, 1] }); intersection.observe(frame);
 control("audit").onclick = audit;
+control("inspect-editing").onclick = inspectEditing;
+control("map-recovery").onclick = testGraphicsRecovery;
 control("arm-scenario").onclick = () => arm("scenario"); control("arm-state").onclick = () => arm("state"); control("sample").onclick = startCadence;
 control("cancel").onclick = () => { cancelActive("Cancelled by the checking utility"); say("Active checks cancelled; their records remain available."); };
 control("refresh").onclick = () => { if (pending || cadence) return; update(); };

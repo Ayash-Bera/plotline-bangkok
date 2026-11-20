@@ -35,13 +35,13 @@ function invalid(name: string): never {
 
 export async function loadSite(): Promise<SiteData> {
   const [zone, buildings, roads, defaultPlot, roadsCatalog, metadata] = await Promise.all([
-    asset('zone.geojson'), asset('buildings.geojson'), asset('roads.geojson'),
-    asset('study-plot.geojson'), asset('roads-catalog.json'), asset('metadata.json'),
+    asset('zone.json'), asset('buildings.json'), asset('roads.json'),
+    asset('study-plot.json'), asset('roads-catalog.json'), asset('metadata.json'),
   ]);
-  if (!area(zone) || zone.geometry.type !== 'Polygon' || Number(zone.properties?.LUP_FAR) !== 2.5 || Number(zone.properties?.LUP_OSR) !== 12.5) invalid('zone.geojson');
-  if (!collection(buildings) || !buildings.features.length || !buildings.features.every(value => area(value) && typeof value.properties?.render_height === 'number' && Number.isFinite(value.properties.render_height) && value.properties.render_height > 0 && ['tagged', 'levels-estimate', 'illustrative-default'].includes(String(value.properties.height_source)))) invalid('buildings.geojson');
-  if (!collection(roads) || !roads.features.length || !roads.features.every(value => feature(value) && value.geometry.type === 'LineString' && line(value.geometry.coordinates))) invalid('roads.geojson');
-  if (!area(defaultPlot) || defaultPlot.geometry.type !== 'Polygon' || defaultPlot.properties?.hypothetical !== true) invalid('study-plot.geojson');
+  if (!area(zone) || zone.geometry.type !== 'Polygon' || Number(zone.properties?.LUP_FAR) !== 2.5 || Number(zone.properties?.LUP_OSR) !== 12.5) invalid('zone.json');
+  if (!collection(buildings) || !buildings.features.length || !buildings.features.every(value => area(value) && typeof value.properties?.render_height === 'number' && Number.isFinite(value.properties.render_height) && value.properties.render_height > 0 && ['tagged', 'levels-estimate', 'illustrative-default'].includes(String(value.properties.height_source)))) invalid('buildings.json');
+  if (!collection(roads) || !roads.features.length || !roads.features.every(value => feature(value) && value.geometry.type === 'LineString' && line(value.geometry.coordinates))) invalid('roads.json');
+  if (!area(defaultPlot) || defaultPlot.geometry.type !== 'Polygon' || defaultPlot.properties?.hypothetical !== true) invalid('study-plot.json');
   if (!Array.isArray(roadsCatalog) || !roadsCatalog.length || !roadsCatalog.every(road)) invalid('roads-catalog.json');
   if (!object(metadata) || typeof metadata.snapshot !== 'string' || !Number.isFinite(Date.parse(metadata.snapshot)) || typeof metadata.source !== 'string' || !Array.isArray(metadata.notes) || !metadata.notes.every(note => typeof note === 'string') || !Array.isArray(metadata.coverage) || metadata.coverage.length !== 4 || !metadata.coverage.every(n => typeof n === 'number' && Number.isFinite(n)) || metadata.coverage[0] >= metadata.coverage[2] || metadata.coverage[1] >= metadata.coverage[3]) invalid('metadata.json');
   const positions = defaultPlot.geometry.coordinates[0].slice(0, -1);

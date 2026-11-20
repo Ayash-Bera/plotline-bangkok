@@ -40,7 +40,7 @@ describe('concept family ordering', () => {
   it('assigns truthful identities to the reviewed irregular parcel in the supplied zone', () => {
     const load = (name: string) => JSON.parse(readFileSync(`public/data/${name}`, 'utf8'));
     const r = request();
-    r.zone = load('zone.geojson');
+    r.zone = load('zone.json');
     r.road = { ...load('roads-catalog.json')[0], width: 9.5, widthEvidence: 'scenario' };
     r.storeyHeight = 2.9;
     r.heightLimit = 12.1;
@@ -263,8 +263,8 @@ describe('site analysis', () => {
   it('returns two conditional families for the supplied site', () => {
     const load = (name: string) => JSON.parse(readFileSync(`public/data/${name}`, 'utf8'));
     const r = request();
-    r.plot = load('study-plot.geojson');
-    r.zone = load('zone.geojson');
+    r.plot = load('study-plot.json');
+    r.zone = load('zone.json');
     r.road = load('roads-catalog.json')[0];
     const result = analyze(r);
     expect(result.status, result.message).toBe('ready');

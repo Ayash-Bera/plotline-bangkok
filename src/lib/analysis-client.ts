@@ -1,6 +1,8 @@
 import type { AnalysisEvent } from "./analysis-state";
 import type { AnalysisRequest, WorkerReply } from "./domain";
 
+const EXECUTION_TIMEOUT_MS = 30_000;
+
 export interface AnalysisWorker {
   onmessage: ((event: MessageEvent<WorkerReply>) => void) | null;
   onerror: ((event: ErrorEvent) => void) | null;
@@ -30,6 +32,7 @@ export function createAnalysisClient({ createWorker, nextRevision, onEvent }: Cl
   let inFlight: AnalysisRequest | null = null;
   let pending: AnalysisRequest | null = null;
   let timer: ReturnType<typeof setTimeout> | null = null;
+  let executionTimer: ReturnType<typeof setTimeout> | null = null;
   let fatalError: string | null = null;
 
   const clearTimer = () => {
@@ -37,7 +40,13 @@ export function createAnalysisClient({ createWorker, nextRevision, onEvent }: Cl
     timer = null;
   };
 
+  const clearExecutionTimer = () => {
+    if (executionTimer !== null) clearTimeout(executionTimer);
+    executionTimer = null;
+  };
+
   const retireWorker = () => {
+    clearExecutionTimer();
     const previous = worker;
     worker = null;
     generation++;
@@ -75,6 +84,7 @@ export function createAnalysisClient({ createWorker, nextRevision, onEvent }: Cl
           return;
         }
         if (!inFlight || replyRevision !== inFlight.revision) return;
+        clearExecutionTimer();
         inFlight = null;
         if (inputKey != null && replyRevision === revision) {
           if (reply.type === "result") onEvent({ type: "received", result: reply.result });
@@ -108,6 +118,13 @@ export function createAnalysisClient({ createWorker, nextRevision, onEvent }: Cl
     const target = ensureWorker();
     if (!target) return;
     inFlight = request;
+    const requestGeneration = generation;
+    clearExecutionTimer();
+    executionTimer = setTimeout(() => {
+      if (disposed || worker !== target || generation !== requestGeneration || inFlight !== request) return;
+      executionTimer = null;
+      failFatal(null, "The calculation worker did not respond within 30 seconds.");
+    }, EXECUTION_TIMEOUT_MS);
     try {
       target.postMessage(request);
     } catch (error) {
@@ -120,6 +137,7 @@ export function createAnalysisClient({ createWorker, nextRevision, onEvent }: Cl
     clearTimer();
     pending = null;
     if (inputKey == null) {
+      retireWorker();
       onEvent({ type: "cleared", revision });
       return;
     }

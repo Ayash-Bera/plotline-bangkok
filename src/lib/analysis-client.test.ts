@@ -68,9 +68,101 @@ function harness() {
 }
 
 beforeEach(() => vi.useFakeTimers());
-afterEach(() => vi.useRealTimers());
+afterEach(() => {
+  vi.restoreAllMocks();
+  vi.useRealTimers();
+});
 
 describe("analysis worker lifecycle", () => {
+  it("times out a silent execution and retries identical input on a fresh worker", () => {
+    const h = harness();
+    h.client.setInput(input());
+    vi.advanceTimersByTime(80);
+    const stalled = h.workers[0];
+    vi.advanceTimersByTime(29_999);
+    expect(h.state.busy).toBe(true);
+    expect(stalled.terminated).toBe(false);
+    vi.advanceTimersByTime(1);
+    expect(h.state.busy).toBe(false);
+    expect(h.state.error).toContain("30 seconds");
+    expect(stalled.terminated).toBe(true);
+    expect(vi.getTimerCount()).toBe(0);
+
+    h.client.retry();
+    vi.advanceTimersByTime(80);
+    expect(h.workers[1].sent.map(request => request.revision)).toEqual([2]);
+    h.workers[1].reply({ type: "result", result: result(2) });
+    vi.advanceTimersByTime(30_000);
+    expect(h.state.result?.revision).toBe(2);
+    expect(h.state.error).toBeNull();
+    expect(h.workers[1].terminated).toBe(false);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("does not extend a stalled execution deadline when newer inputs queue", () => {
+    const h = harness();
+    h.client.setInput(input());
+    vi.advanceTimersByTime(80);
+    const worker = h.workers[0];
+    vi.advanceTimersByTime(10_000);
+    h.client.setInput(input(21));
+    vi.advanceTimersByTime(10_000);
+    h.client.setInput(input(22));
+    vi.advanceTimersByTime(9_999);
+    expect(h.state.busy).toBe(true);
+    vi.advanceTimersByTime(1);
+    expect(h.state.revision).toBe(3);
+    expect(h.events.at(-1)).toMatchObject({ type: "failed", revision: 3 });
+    expect(worker.sent.map(request => request.revision)).toEqual([1]);
+    expect(worker.terminated).toBe(true);
+    expect(vi.getTimerCount()).toBe(0);
+
+    h.client.retry();
+    vi.advanceTimersByTime(80);
+    expect(h.workers[1].sent.map(request => [request.revision, request.road.width])).toEqual([[4, 22]]);
+    h.workers[1].reply({ type: "result", result: result(4) });
+    expect(h.state.result?.revision).toBe(4);
+  });
+
+  it("gives queued executions their own deadline and ignores unrelated replies", () => {
+    const h = harness();
+    h.client.setInput(input());
+    vi.advanceTimersByTime(80);
+    const worker = h.workers[0];
+    h.client.setInput(input(21));
+    vi.advanceTimersByTime(29_000);
+    worker.reply({ type: "result", result: result(1) });
+    expect(worker.sent.map(request => request.revision)).toEqual([1, 2]);
+    vi.advanceTimersByTime(1_000);
+    expect(h.state.busy).toBe(true);
+    worker.reply({ type: "result", result: result(1) });
+    worker.reply({ type: "result", result: result(999) });
+    vi.advanceTimersByTime(28_999);
+    expect(h.state.busy).toBe(true);
+    vi.advanceTimersByTime(1);
+    expect(h.state.error).toContain("30 seconds");
+    expect(worker.terminated).toBe(true);
+  });
+
+  it("ignores saved watchdog callbacks from a retired worker", () => {
+    const timeout = vi.spyOn(globalThis, "setTimeout");
+    const h = harness();
+    h.client.setInput(input());
+    vi.advanceTimersByTime(80);
+    const oldWatchdog = timeout.mock.calls.find(([, delay]) => delay === 30_000)![0];
+    h.client.retry();
+    vi.advanceTimersByTime(80);
+    oldWatchdog();
+    expect(h.state.busy).toBe(true);
+    expect(h.state.error).toBeNull();
+    expect(h.workers[1].terminated).toBe(false);
+    vi.advanceTimersByTime(29_999);
+    expect(h.state.busy).toBe(true);
+    vi.advanceTimersByTime(1);
+    expect(h.state.error).toContain("30 seconds");
+    expect(h.workers[1].terminated).toBe(true);
+  });
+
   it("debounces startup and recovers identical input after construction failure only on explicit retry", () => {
     const h = harness();
     h.createWorker.mockImplementationOnce(() => { throw new Error("Worker asset unavailable"); });
@@ -108,6 +200,7 @@ describe("analysis worker lifecycle", () => {
     expect(h.state.revision).toBe(2);
     expect(h.state.error).toContain("Worker stopped");
     expect(old.terminated).toBe(true);
+    expect(vi.getTimerCount()).toBe(0);
     h.client.retry();
     vi.advanceTimersByTime(80);
     const current = h.workers[1];
@@ -172,14 +265,18 @@ describe("analysis worker lifecycle", () => {
     h.client.setInput(null);
     expect(h.state.inputKey).toBeNull();
     expect(h.state.busy).toBe(false);
+    expect(worker.terminated).toBe(true);
+    expect(vi.getTimerCount()).toBe(0);
     worker.reply({ type: "result", result: result(1) });
     h.client.retry();
-    vi.advanceTimersByTime(1000);
+    vi.advanceTimersByTime(30_000);
     expect(h.state.result).toBeNull();
     expect(worker.sent.map(request => request.revision)).toEqual([1]);
     h.client.setInput(input(22));
     vi.advanceTimersByTime(80);
-    expect(worker.sent.map(request => request.revision)).toEqual([1, 4]);
+    expect(h.workers[1].sent.map(request => request.revision)).toEqual([4]);
+    h.workers[1].reply({ type: "result", result: result(4) });
+    expect(h.state.result?.revision).toBe(4);
   });
 
   it("handles postMessage failure with explicit fresh-worker recovery", () => {
@@ -194,6 +291,7 @@ describe("analysis worker lifecycle", () => {
     vi.advanceTimersByTime(80);
     expect(h.state.error).toContain("Could not clone scenario");
     expect(h.workers[0].terminated).toBe(true);
+    expect(vi.getTimerCount()).toBe(0);
     vi.advanceTimersByTime(1000);
     expect(h.createWorker).toHaveBeenCalledTimes(1);
     h.client.retry();
@@ -210,6 +308,7 @@ describe("analysis worker lifecycle", () => {
     worker.reply({ type: "error", revision: 1, error: "Scenario calculation failed" });
     expect(h.state.error).toBe("Scenario calculation failed");
     expect(worker.terminated).toBe(false);
+    expect(vi.getTimerCount()).toBe(0);
     h.client.setInput(input(21));
     vi.advanceTimersByTime(80);
     worker.reply({ type: "result", result: result(2) });
@@ -225,6 +324,7 @@ describe("analysis worker lifecycle", () => {
     h.workers[0].unreadable();
     expect(h.state.error).toContain("could not be read");
     expect(h.workers[0].terminated).toBe(true);
+    expect(vi.getTimerCount()).toBe(0);
     h.client.retry();
     vi.advanceTimersByTime(80);
     expect(h.createWorker).toHaveBeenCalledTimes(2);
@@ -242,12 +342,13 @@ describe("analysis worker lifecycle", () => {
     h.client.dispose();
     h.client.setInput(input(22));
     h.client.retry();
-    vi.advanceTimersByTime(1000);
+    vi.advanceTimersByTime(60_000);
     oldReply({ data: { type: "result", result: result(2) } } as MessageEvent<WorkerReply>);
     oldError({ message: "Disposed worker error" } as ErrorEvent);
     expect(h.events).toHaveLength(beforeCleanup);
     expect(old.terminated).toBe(true);
     expect(old.sent).toHaveLength(1);
+    expect(vi.getTimerCount()).toBe(0);
 
     const recreated = h.recreate();
     recreated.setInput(input(21));
